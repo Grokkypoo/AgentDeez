@@ -1,20 +1,43 @@
 # AgentDeez
 
-Agent-focused fork of [CozyBrowsin](https://github.com/Grokkypoo/CozyBrowsin). A minimal Chromium browser with tabs and Brave's ad blocker, plus automatic Discord session login for agents.
+Agent-focused fork of [CozyBrowsin](https://github.com/Grokkypoo/CozyBrowsin). A minimal Chromium browser with tabs and Brave's ad blocker, plus automatic Discord login and session token extraction for agents.
 
 It has its own profile so Discord sessions persist across launches.
 
-## Discord login for agents (automatic)
+## Discord login for agents
 
-Put the token in one of these places before starting:
+Two modes:
 
-- Environment variable: `DISCORD_TOKEN=your_token_here`
-- File: `%TEMP%\\dtok.txt` (Windows) or `/tmp/dtok.txt` (Linux/macOS)
-- File: `%TEMP%\\discord-token.txt` or the app's userData folder `discord-token.txt`
+### 1. Auto-fill credentials → extract token (recommended for first-time)
 
-If a token is found, AgentDeez opens `https://discord.com/app` and automatically injects it. The page reloads and you are signed in. Quit with Ctrl+Q so the session is flushed to disk.
+Provide email + password via:
 
-Agents can simply write the token to `%TEMP%\\dtok.txt` (or set the env var) and launch the browser.
+- Environment: `DISCORD_EMAIL=you@example.com` and `DISCORD_PASSWORD=yourpass`
+- Or file: `%TEMP%\discord-creds.json` (or in userData) with:
+  ```json
+  { "email": "you@example.com", "password": "yourpass" }
+  ```
+
+AgentDeez opens the Discord login page, fills the form, and submits. After login succeeds it extracts the session token from `localStorage` and writes it to the token files for future use / other agents.
+
+### 2. Existing token injection
+
+If a token already exists, put it in:
+
+- `DISCORD_TOKEN` env var
+- `%TEMP%\dtok.txt` or `/tmp/dtok.txt`
+- `%TEMP%\discord-token.txt`
+- App userData `discord-token.txt`
+
+It injects the token and you are signed in immediately.
+
+**Token output locations** (written after successful login):
+
+- `%TEMP%\dtok.txt`
+- `%TEMP%\discord-token.txt`
+- App userData `discord-token.txt`
+
+Quit with Ctrl+Q the first time so the Electron session is fully flushed.
 
 ## Run from source
 
