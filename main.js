@@ -132,59 +132,105 @@ async function injectDiscordToken(wc, token) {
   }
 }
 
+// Discord's login form is React-controlled, so assigning .value is ignored. Focus each field from the page,
+// then type through webContents.insertText, which goes through Chromium's real text input path.
+async function focusField(wc, selector) {
+  return wc.executeJavaScript(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return false;
+    el.focus();
+    el.select && el.select();
+    return document.activeElement === el;
+  })()`, true);
+}
+
 async function autoFillAndLogin(wc, email, password) {
-  if (wc.isDestroyed()) return;
-  const js = `
-    (async () => {
-      const sleep = ms => new Promise(r => setTimeout(r, ms));
-      for (let i = 0; i < 30; i++) {
-        const emailEl = document.querySelector('input[name="email"], input[type="email"]');
-        const passEl = document.querySelector('input[name="password"], input[type="password"]');
-        if (emailEl && passEl) {
-          emailEl.focus();
-          emailEl.value = ${JSON.stringify(email)};
-          emailEl.dispatchEvent(new Event('input', { bubbles: true }));
-          emailEl.dispatchEvent(new Event('change', { bubbles: true }));
-          passEl.focus();
-          passEl.value = ${JSON.stringify(password)};
-          passEl.dispatchEvent(new Event('input', { bubbles: true }));
-          passEl.dispatchEvent(new Event('change', { bubbles: true }));
-          const btn = document.querySelector('button[type="submit"]');
-          if (btn) btn.click();
-          return 'filled';
-        }
-        await sleep(500);
-      }
-      return 'no-form';
-    })()
-  `;
+  if (wc.isDestroyed()) return 'destroyed';
+  const EMAIL = 'input[name="email"], input[type="email"]';
+  const PASS = 'input[name="password"], input[type="password"]';
   try {
-    const result = await wc.executeJavaScript(js, true);
-    console.log('Auto-fill result:', result);
+    const ready = await wc.executeJavaScript(`(async () => {
+      for (let i = 0; i < 60; i++) {
+        if (document.querySelector(${JSON.stringify(EMAIL)}) && document.querySelector(${JSON.stringify(PASS)})) return true;
+        await new Promise(r => setTimeout(r, 500));
+      }
+      return false;
+    })()`, true);
+    if (!ready) { console.log('Auto-fill result: no-form'); return 'no-form'; }
+    for (const [sel, val] of [[EMAIL, email], [PASS, password]]) {
+      if (!(await focusField(wc, sel))) { console.log('Auto-fill result: focus-failed'); return 'focus-failed'; }
+      await wc.insertText(val);
+    }
+    const lens = await wc.executeJavaScript(`[document.querySelector(${JSON.stringify(EMAIL)}).value.length, document.querySelector(${JSON.stringify(PASS)}).value.length]`, true);
+    const ok = lens[0] === email.length && lens[1] === password.length;
+    console.log(`Auto-fill result: ${ok ? 'filled' : 'mismatch'} (email ${lens[0]}/${email.length} chars, password ${lens[1]}/${password.length} chars)`);
+    await wc.executeJavaScript(`(() => { const b = document.querySelector('button[type="submit"]'); if (b) b.click(); return !!b; })()`, true);
+    setTimeout(() => reportLoginState(wc), 6000);
+    return ok ? 'filled' : 'mismatch';
   } catch (e) {
-    console.error('Auto-fill failed', e);
+    console.error('Auto-fill failed', String(e.message || e));
+    return 'error';
   }
 }
 
-async function extractAndSaveToken(wc) {
+// What the login page shows after submit, without any field values: captcha, MFA, verification or error text.
+async function reportLoginState(wc) {
   if (wc.isDestroyed()) return;
   try {
-    const token = await wc.executeJavaScript(`
-      (() => {
-        try {
-          const t = localStorage.getItem('token');
-          return t ? t.replace(/^"|"$/g, '') : null;
-        } catch { return null; }
-      })()
-    `, true);
+    const s = await wc.executeJavaScript(`(() => {
+      const q = s => document.querySelector(s);
+      const errs = [...document.querySelectorAll('[class*="error"], [class*="errorMessage"]')].map(e => e.textContent.trim()).filter(Boolean).slice(0, 5);
+      return {
+        path: location.pathname,
+        captcha: !!q('iframe[src*="hcaptcha"], iframe[src*="captcha"], [class*="captcha"]'),
+        mfa: !!q('input[autocomplete="one-time-code"], input[placeholder*="6-digit"], input[maxlength="6"]'),
+        heading: (q('h1, h2, h3') || {}).textContent || '',
+        errors: errs,
+      };
+    })()`, true);
+    console.log('Login state:', JSON.stringify(s));
+  } catch (e) {
+    console.error('Login state check failed', String(e.message || e));
+  }
+}
+
+// Discord removes window.localStorage from the page, so read it through a fresh same-origin iframe.
+const READ_TOKEN_JS = `(() => {
+  try {
+    const f = document.createElement('iframe');
+    f.style.display = 'none';
+    document.body.appendChild(f);
+    const t = f.contentWindow.localStorage.getItem('token');
+    f.remove();
+    return t ? t.replace(/^"|"$/g, '') : null;
+  } catch { return null; }
+})()`;
+
+// Authorization header from the page's own API calls, kept in memory only as a fallback source.
+let seenAuthHeader = null;
+function watchDiscordAuth(ses) {
+  ses.webRequest.onBeforeSendHeaders({ urls: ['https://discord.com/api/*', 'https://*.discord.com/api/*'] }, (details, cb) => {
+    const h = details.requestHeaders.Authorization || details.requestHeaders.authorization;
+    if (h && h.length > 20 && !h.startsWith('Bot ')) seenAuthHeader = h;
+    cb({ requestHeaders: details.requestHeaders });
+  });
+}
+
+// Poll for the session token after login, then save it. Returns true once saved.
+async function extractAndSaveToken(wc, tries = 60) {
+  for (let i = 0; i < tries; i++) {
+    if (wc.isDestroyed()) return false;
+    let token = null;
+    try { token = await wc.executeJavaScript(READ_TOKEN_JS, true); } catch {}
+    if (!(token && token.length > 20)) token = seenAuthHeader;
     if (token && token.length > 20) {
       await saveDiscordToken(token);
-      return token;
+      return true;
     }
-  } catch (e) {
-    console.error('Token extract failed', e);
+    await new Promise(r => setTimeout(r, 1000));
   }
-  return null;
+  console.log('Token extract: no token found after login');
+  return false;
 }
 
 const openWindow = url => tabs.openWindow(url, HOME);
@@ -256,6 +302,7 @@ if (!app.requestSingleInstanceLock()) {
       return decisions.get(`${originOf(origin)} ${permission}`) === true;
     });
     setUpAdblock(session.defaultSession, tabs.countBlocked);
+    watchDiscordAuth(session.defaultSession);
     tabs.setUpStripMessages();
 
     const token = readDiscordToken();
@@ -266,6 +313,9 @@ if (!app.requestSingleInstanceLock()) {
     const wc = tabs.pageOf(state.win);
     if (wc) {
       let injected = false;
+      let injectedAt = 0;
+      let filling = false;
+      let extracting = false;
       let extracted = false;
 
       const onLoad = async () => {
@@ -275,23 +325,30 @@ if (!app.requestSingleInstanceLock()) {
         // If we already have a token, inject it
         if (token && !injected && (url.includes('discord.com') || url === 'about:blank')) {
           injected = true;
+          injectedAt = Date.now();
           await injectDiscordToken(wc, token);
+          return;
         }
 
-        // If we have credentials and are on the login page, auto-fill
-        if (creds && !injected && url.includes('/login')) {
+        // If we have credentials and are on the login page, auto-fill once. With a stored token this only
+        // happens when Discord bounced back to /login after the injected token's reload (token expired).
+        if (creds && !filling && url.includes('/login') && (!injected || Date.now() - injectedAt > 3000)) {
+          filling = true;
           await autoFillAndLogin(wc, creds.email, creds.password);
         }
 
         // After login (on /app or channels), extract and save the token
-        if (!extracted && (url.includes('/app') || url.includes('/channels'))) {
-          extracted = true;
-          await extractAndSaveToken(wc);
+        if (!extracted && !extracting && (url.includes('/app') || url.includes('/channels'))) {
+          extracting = true;
+          extracted = await extractAndSaveToken(wc);
+          extracting = false;
         }
       };
 
       wc.on('did-finish-load', onLoad);
       wc.on('did-navigate', onLoad);
+      // Discord moves from /login to /channels with pushState, which only fires did-navigate-in-page.
+      wc.on('did-navigate-in-page', onLoad);
       setTimeout(onLoad, 800);
     }
 

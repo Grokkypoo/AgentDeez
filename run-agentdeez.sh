@@ -22,9 +22,9 @@ done
 export INFISICAL_API_URL INFISICAL_ENV INFISICAL_SECRET_PATH
 CLI_DOMAIN="${INFISICAL_API_URL%/}"; CLI_DOMAIN="${CLI_DOMAIN%/api}/api"
 
-INFISICAL_TOKEN="$(infisical login --method=universal-auth \
-  --client-id="$INFISICAL_UNIVERSAL_AUTH_CLIENT_ID" --client-secret="$INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET" \
-  --domain="$CLI_DOMAIN" --silent --plain)" || die "Universal Auth login failed"
+# Client id/secret and the access token travel only in env (the CLI reads INFISICAL_UNIVERSAL_AUTH_CLIENT_ID/_SECRET
+# and INFISICAL_TOKEN), never in argv, so they don't show up in ps or /proc/*/cmdline.
+INFISICAL_TOKEN="$(infisical login --method=universal-auth --domain="$CLI_DOMAIN" --silent --plain)" || die "Universal Auth login failed"
 export INFISICAL_TOKEN
 
 APPIMAGE="${AGENTDEEZ_APPIMAGE:-$(ls -1t "$HERE"/dist/AgentDeez-*.AppImage 2>/dev/null | head -1 || true)}"
@@ -34,6 +34,6 @@ else
   cd "$HERE"; cmd=(npx --no-install electron .)
 fi
 
-exec infisical run --domain="$CLI_DOMAIN" --token="$INFISICAL_TOKEN" \
+exec infisical run --domain="$CLI_DOMAIN" \
   --projectId="$INFISICAL_PROJECT_ID" --env="$INFISICAL_ENV" --path="$INFISICAL_SECRET_PATH" \
   -- "${cmd[@]}" "$@"
