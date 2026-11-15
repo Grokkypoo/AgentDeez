@@ -39,6 +39,18 @@ It injects the token and you are signed in immediately.
 
 Quit with Ctrl+Q the first time so the Electron session is fully flushed.
 
+## Credentials from local Infisical
+
+With `INFISICAL_PROJECT_ID` plus Universal Auth client creds (or `INFISICAL_TOKEN`) in the environment, AgentDeez:
+
+- gets `DISCORD_TOKEN`, `DISCORD_EMAIL`, `DISCORD_PASSWORD` as env vars from `infisical run`
+- writes a freshly extracted token back to the `DISCORD_TOKEN` secret over the Infisical API
+- skips all plaintext token/cred files (set `AGENTDEEZ_TOKEN_FILES=1` to keep them)
+
+Launch with `./run-agentdeez.sh`. It reads `~/.config/agentdeez/infisical-identity.env` (chmod 600, template in `infisical-identity.env.example`), logs in the machine identity, and runs the AppImage from `dist/` or, with `AGENTDEEZ_FROM_SOURCE=1`, `npx electron .`.
+
+The browser profile (cookies, Discord session) lives in `~/.config/AgentDeez` for both source and AppImage runs. Override with `AGENTDEEZ_PROFILE_DIR`.
+
 ## Run from source
 
 ```bash

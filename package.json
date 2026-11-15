@@ -21,6 +21,7 @@
     "productName": "AgentDeez",
     "files": [
       "main.js",
+      "infisical.js",
       "updater.js",
       "tabs.js",
       "adblock.js",

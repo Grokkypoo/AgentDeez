@@ -7,6 +7,16 @@ const tabs = require('./tabs');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const infisical = require('./infisical');
+
+// One fixed profile for source runs and the AppImage, so the Discord session persists across both.
+// Override with AGENTDEEZ_PROFILE_DIR.
+app.setPath('userData', process.env.AGENTDEEZ_PROFILE_DIR || path.join(app.getPath('appData'), 'AgentDeez'));
+
+// With Infisical configured, plaintext token/cred files are neither read nor written unless
+// AGENTDEEZ_TOKEN_FILES=1. Without Infisical, files stay on (old behavior) unless AGENTDEEZ_TOKEN_FILES=0.
+const USE_INFISICAL = infisical.isConfigured();
+const USE_TOKEN_FILES = process.env.AGENTDEEZ_TOKEN_FILES ? process.env.AGENTDEEZ_TOKEN_FILES === '1' : !USE_INFISICAL;
 
 const HOME = 'https://duckduckgo.com/';
 const ASK = new Set(['media', 'geolocation', 'notifications', 'display-capture', 'clipboard-read']);
@@ -34,6 +44,7 @@ function tokenPaths() {
 
 function readDiscordToken() {
   if (process.env.DISCORD_TOKEN) return process.env.DISCORD_TOKEN.trim();
+  if (!USE_TOKEN_FILES) return null;
   for (const p of tokenPaths()) {
     try {
       if (fs.existsSync(p)) {
@@ -45,15 +56,29 @@ function readDiscordToken() {
   return null;
 }
 
-function saveDiscordToken(token) {
+async function saveDiscordToken(token) {
   if (!token || token.length < 20) return;
+  if (USE_INFISICAL) {
+    if (token === (process.env.DISCORD_TOKEN || '').trim()) {
+      console.log('Discord session token unchanged; Infisical already current');
+    } else {
+      try {
+        await infisical.saveToken(token);
+        process.env.DISCORD_TOKEN = token;
+        console.log('Discord session token saved to Infisical');
+      } catch (e) {
+        console.error(String(e.message || e));
+      }
+    }
+  }
+  if (!USE_TOKEN_FILES) return;
   const targets = tokenPaths();
   for (const p of targets) {
     try {
       fs.writeFileSync(p, token, { mode: 0o600 });
     } catch {}
   }
-  console.log('Discord session token saved for agents');
+  console.log('Discord session token saved to token files');
 }
 
 function readDiscordCreds() {
@@ -61,6 +86,7 @@ function readDiscordCreds() {
   const email = process.env.DISCORD_EMAIL || process.env.DISCORD_USER;
   const password = process.env.DISCORD_PASSWORD;
   if (email && password) return { email: email.trim(), password: password.trim() };
+  if (!USE_TOKEN_FILES) return null;
 
   // File: %TEMP%/discord-creds.json or userData
   const candidates = [
@@ -152,7 +178,7 @@ async function extractAndSaveToken(wc) {
       })()
     `, true);
     if (token && token.length > 20) {
-      saveDiscordToken(token);
+      await saveDiscordToken(token);
       return token;
     }
   } catch (e) {
