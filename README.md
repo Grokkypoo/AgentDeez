@@ -4,6 +4,8 @@ Agent-focused fork of [CozyBrowsin](https://github.com/Grokkypoo/CozyBrowsin). A
 
 It has its own profile so Discord sessions persist across launches.
 
+Includes a lightweight stealth preload (`stealth-preload.js`) and a few Electron command-line switches that reduce common automation tells (navigator.webdriver, canvas/WebGL/audio fingerprint noise, AutomationControlled). Session-stable noise so fingerprints stay consistent within a run.
+
 ## Discord login for agents
 
 Two modes:
@@ -88,7 +90,7 @@ COZYBROWSIN_UPDATE_URL=https://github.com/OWNER/REPO/releases/latest/download np
 - Chromium saves cookies on a delay, so a crash or force-kill can lose very recent logins. Quit with Ctrl+Q.
 - Ad blocking uses Brave's `adblock-rust` engine with Brave's default lists, minus the mobile-only ones. Lists refresh daily and apply at the next start.
 - The button at the top right shows how many requests were blocked on the page. Click it to turn blocking off for that site, for example if blocking breaks it.
-- It doesn't have Brave's other protections, such as fingerprint randomizing, or uBlock's procedural (`:has-text`-style) element hiding.
+- Stealth preload (`stealth-preload.js`) applies session-stable canvas / WebGL / audio noise and hides `navigator.webdriver`. Not a full anti-detect browser; higher-end systems still look at TLS, timing, and behavioral signals.
 - It has no password manager or Safe Browsing.
 - It only gets browser security fixes when a new release is published, so publish regularly.
 - To change the home page or search engine, edit `HOME` in `main.js`.
