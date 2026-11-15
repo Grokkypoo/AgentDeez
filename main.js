@@ -9,6 +9,12 @@ const path = require('node:path');
 const os = require('node:os');
 const infisical = require('./infisical');
 
+// Reduce a few common automation signals before the app is ready.
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
+// Optional: force a more consumer-like GPU process if software rendering is an issue.
+// app.commandLine.appendSwitch('use-gl', 'desktop');
+
 // One fixed profile for source runs and the AppImage, so the Discord session persists across both.
 // Override with AGENTDEEZ_PROFILE_DIR.
 app.setPath('userData', process.env.AGENTDEEZ_PROFILE_DIR || path.join(app.getPath('appData'), 'AgentDeez'));
