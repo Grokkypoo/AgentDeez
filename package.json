@@ -1,0 +1,79 @@
+{
+  "name": "agentdeez",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Agent-focused minimal Chromium browser with tabs, Brave ad blocker, and automatic Discord session login.",
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:linux": "electron-builder --linux",
+    "dist:win": "electron-builder --win",
+    "fetch-filters": "node scripts/fetch-filters.mjs"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "author": "CoolGuy",
+  "build": {
+    "appId": "local.agentdeez.app",
+    "productName": "AgentDeez",
+    "files": [
+      "main.js",
+      "updater.js",
+      "tabs.js",
+      "adblock.js",
+      "adblock-preload.js",
+      "strip/**",
+      "scripts/**",
+      "!**/node_modules/adblock-rs/{target,src,benches,fuzz,data}/**",
+      "!**/node_modules/adblock-rs/js/{src,test}/**",
+      "!**/node_modules/adblock-rs/{Cargo.lock,Cargo.toml,rust-toolchain.toml,rustfmt.toml,CHANGELOG.md,README.md}"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "artifactName": "AgentDeez-${version}-${arch}.${ext}",
+    "publish": {
+      "provider": "generic",
+      "url": "${env.COZYBROWSIN_UPDATE_URL}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "category": "Network"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeCliInspectArguments": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "onlyLoadAppFromAsar": true
+    },
+    "toolsets": {
+      "appimage": "1.0.3"
+    },
+    "extraResources": [
+      {
+        "from": "filters",
+        "to": "filters"
+      }
+    ]
+  },
+  "dependencies": {
+    "adblock-rs": "0.13.5",
+    "electron-updater": "6.8.11"
+  }
+}
