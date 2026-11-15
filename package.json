@@ -26,6 +26,7 @@
       "tabs.js",
       "adblock.js",
       "adblock-preload.js",
+      "stealth-preload.js",
       "strip/**",
       "scripts/**",
       "!**/node_modules/adblock-rs/{target,src,benches,fuzz,data}/**",
