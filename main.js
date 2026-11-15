@@ -24,19 +24,54 @@ function toUrl(text) {
   return `${HOME}?q=${encodeURIComponent(t)}`;
 }
 
-function readDiscordToken() {
-  // Prefer env, then common temp locations agents write to.
-  if (process.env.DISCORD_TOKEN) return process.env.DISCORD_TOKEN.trim();
-  const candidates = [
+function tokenPaths() {
+  return [
     path.join(os.tmpdir(), 'dtok.txt'),
     path.join(os.tmpdir(), 'discord-token.txt'),
     path.join(app.getPath('userData'), 'discord-token.txt'),
   ];
-  for (const p of candidates) {
+}
+
+function readDiscordToken() {
+  if (process.env.DISCORD_TOKEN) return process.env.DISCORD_TOKEN.trim();
+  for (const p of tokenPaths()) {
     try {
       if (fs.existsSync(p)) {
         const raw = fs.readFileSync(p, 'utf8').trim();
         if (raw && raw.length > 20) return raw;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function saveDiscordToken(token) {
+  if (!token || token.length < 20) return;
+  const targets = tokenPaths();
+  for (const p of targets) {
+    try {
+      fs.writeFileSync(p, token, { mode: 0o600 });
+    } catch {}
+  }
+  console.log('Discord session token saved for agents');
+}
+
+function readDiscordCreds() {
+  // Env preferred
+  const email = process.env.DISCORD_EMAIL || process.env.DISCORD_USER;
+  const password = process.env.DISCORD_PASSWORD;
+  if (email && password) return { email: email.trim(), password: password.trim() };
+
+  // File: %TEMP%/discord-creds.json or userData
+  const candidates = [
+    path.join(os.tmpdir(), 'discord-creds.json'),
+    path.join(app.getPath('userData'), 'discord-creds.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+        if (j.email && j.password) return { email: j.email.trim(), password: j.password.trim() };
       }
     } catch {}
   }
@@ -69,6 +104,61 @@ async function injectDiscordToken(wc, token) {
   } catch (e) {
     console.error('Discord token inject failed', e);
   }
+}
+
+async function autoFillAndLogin(wc, email, password) {
+  if (wc.isDestroyed()) return;
+  const js = `
+    (async () => {
+      const sleep = ms => new Promise(r => setTimeout(r, ms));
+      for (let i = 0; i < 30; i++) {
+        const emailEl = document.querySelector('input[name="email"], input[type="email"]');
+        const passEl = document.querySelector('input[name="password"], input[type="password"]');
+        if (emailEl && passEl) {
+          emailEl.focus();
+          emailEl.value = ${JSON.stringify(email)};
+          emailEl.dispatchEvent(new Event('input', { bubbles: true }));
+          emailEl.dispatchEvent(new Event('change', { bubbles: true }));
+          passEl.focus();
+          passEl.value = ${JSON.stringify(password)};
+          passEl.dispatchEvent(new Event('input', { bubbles: true }));
+          passEl.dispatchEvent(new Event('change', { bubbles: true }));
+          const btn = document.querySelector('button[type="submit"]');
+          if (btn) btn.click();
+          return 'filled';
+        }
+        await sleep(500);
+      }
+      return 'no-form';
+    })()
+  `;
+  try {
+    const result = await wc.executeJavaScript(js, true);
+    console.log('Auto-fill result:', result);
+  } catch (e) {
+    console.error('Auto-fill failed', e);
+  }
+}
+
+async function extractAndSaveToken(wc) {
+  if (wc.isDestroyed()) return;
+  try {
+    const token = await wc.executeJavaScript(`
+      (() => {
+        try {
+          const t = localStorage.getItem('token');
+          return t ? t.replace(/^"|"$/g, '') : null;
+        } catch { return null; }
+      })()
+    `, true);
+    if (token && token.length > 20) {
+      saveDiscordToken(token);
+      return token;
+    }
+  } catch (e) {
+    console.error('Token extract failed', e);
+  }
+  return null;
 }
 
 const openWindow = url => tabs.openWindow(url, HOME);
@@ -143,25 +233,40 @@ if (!app.requestSingleInstanceLock()) {
     tabs.setUpStripMessages();
 
     const token = readDiscordToken();
-    const startUrl = urlFromArgs(process.argv) || (token ? 'https://discord.com/app' : HOME);
+    const creds = readDiscordCreds();
+    const startUrl = urlFromArgs(process.argv) || ((token || creds) ? 'https://discord.com/login' : HOME);
     const state = openWindow(startUrl);
 
-    if (token) {
-      // Inject once the first page finishes loading (works for discord.com and about:blank).
-      const wc = tabs.pageOf(state.win);
-      if (wc) {
-        const tryInject = () => {
-          if (wc.isDestroyed()) return;
-          const url = wc.getURL();
-          if (url.includes('discord.com') || url === 'about:blank' || url.startsWith('data:')) {
-            injectDiscordToken(wc, token);
-            wc.removeListener('did-finish-load', tryInject);
-          }
-        };
-        wc.on('did-finish-load', tryInject);
-        // Also try immediately in case it's already loaded.
-        setTimeout(tryInject, 500);
-      }
+    const wc = tabs.pageOf(state.win);
+    if (wc) {
+      let injected = false;
+      let extracted = false;
+
+      const onLoad = async () => {
+        if (wc.isDestroyed()) return;
+        const url = wc.getURL();
+
+        // If we already have a token, inject it
+        if (token && !injected && (url.includes('discord.com') || url === 'about:blank')) {
+          injected = true;
+          await injectDiscordToken(wc, token);
+        }
+
+        // If we have credentials and are on the login page, auto-fill
+        if (creds && !injected && url.includes('/login')) {
+          await autoFillAndLogin(wc, creds.email, creds.password);
+        }
+
+        // After login (on /app or channels), extract and save the token
+        if (!extracted && (url.includes('/app') || url.includes('/channels'))) {
+          extracted = true;
+          await extractAndSaveToken(wc);
+        }
+      };
+
+      wc.on('did-finish-load', onLoad);
+      wc.on('did-navigate', onLoad);
+      setTimeout(onLoad, 800);
     }
 
     setUpUpdater();
