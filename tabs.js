@@ -6,7 +6,13 @@ const { isEnabled, toggleSite } = require('./adblock');
 const STRIP_HEIGHT = 36;
 const REOPEN_LIMIT = 25;
 // Sandboxed, so this only lets the ad block preload run in iframes. It gives pages no Node access.
-const PAGE_PREFS = { sandbox: true, contextIsolation: true, nodeIntegrationInSubFrames: true };
+// stealth-preload.js reduces common automation / fingerprint signals (webdriver, canvas, WebGL, audio).
+const PAGE_PREFS = {
+  sandbox: true,
+  contextIsolation: true,
+  nodeIntegrationInSubFrames: true,
+  preload: path.join(__dirname, 'stealth-preload.js'),
+};
 
 const windows = new Map(); // BaseWindow -> window state
 const byStrip = new Map(); // strip webContents -> window state
