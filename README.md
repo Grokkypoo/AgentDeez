@@ -41,6 +41,20 @@ It injects the token and you are signed in immediately.
 
 Quit with Ctrl+Q the first time so the Electron session is fully flushed.
 
+## Discord signup up to the captcha
+
+`scripts/signup-until-captcha.sh` opens `https://discord.gg/arcane` in a separate profile (`~/.config/AgentDeez-signup`). That invite shows a display name and a birthday first. The script fills those, submits, and stops when a live hCaptcha is on screen. It sends one probe to the `captcha-solver` destination and does not click the puzzle. The window stays open.
+
+```bash
+bash scripts/signup-until-captcha.sh
+```
+
+Defaults are display name `Harbor Quill` and birthday March 15, 1996. Override with `AGENTDEEZ_DISPLAY_NAME`, `AGENTDEEZ_BIRTH_MONTH`, `AGENTDEEZ_BIRTH_DAY`, and `AGENTDEEZ_BIRTH_YEAR`. The mail control center (`outlook-email-automation`, next to this repo, or `OUTLOOK_AUTOMATION_ROOT`) reserves the address. With `softeria` it only reserves the address. `AGENTDEEZ_USE_RELAY=1` asks for a Firefox Relay mask.
+
+`node scripts/discord-signup.js` checks the captcha classifier and the invite URL match without opening a window.
+
+After the captcha, the same run can fill the email, username, and password when that screen appears. A one-time code field calls `wait-verification` and types the code or opens the confirm link. The mailbox has to be readable (`MAIL_BACKEND=thunderbird` or `graph`) for that step.
+
 ## Credentials from local Infisical
 
 With `INFISICAL_PROJECT_ID` plus Universal Auth client creds (or `INFISICAL_TOKEN`) in the environment, AgentDeez:

@@ -5,13 +5,24 @@ const { setUpUpdater, checkForUpdatesNow } = require('./updater');
 const { setUpAdblock } = require('./adblock');
 const tabs = require('./tabs');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const os = require('node:os');
 const infisical = require('./infisical');
+const mail = require('./mail-control');
+const signup = require('./scripts/discord-signup');
 
 // Reduce a few common automation signals before the app is ready.
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 app.commandLine.appendSwitch('disable-features', 'IsolateOrigins,site-per-process');
+// Signup runs open a localhost port so this process can read the hCaptcha frame.
+// The port stays on 127.0.0.1. It is not sent to the captcha bot.
+// The main profile never opens this port.
+if (process.env.AGENTDEEZ_SIGNUP_PLATFORM) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.AGENTDEEZ_CDP_PORT || '9222');
+  app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1');
+  app.commandLine.appendSwitch('remote-allow-origins', '*');
+}
 // Optional: force a more consumer-like GPU process if software rendering is an issue.
 // app.commandLine.appendSwitch('use-gl', 'desktop');
 
@@ -181,22 +192,272 @@ async function autoFillAndLogin(wc, email, password) {
 
 // What the login page shows after submit, without any field values: captcha, MFA, verification or error text.
 async function reportLoginState(wc) {
-  if (wc.isDestroyed()) return;
+  if (wc.isDestroyed()) return null;
   try {
     const s = await wc.executeJavaScript(`(() => {
       const q = s => document.querySelector(s);
       const errs = [...document.querySelectorAll('[class*="error"], [class*="errorMessage"]')].map(e => e.textContent.trim()).filter(Boolean).slice(0, 5);
+      const body = (document.body && document.body.innerText || '').slice(0, 4000);
       return {
         path: location.pathname,
-        captcha: !!q('iframe[src*="hcaptcha"], iframe[src*="captcha"], [class*="captcha"]'),
+        captcha: !!q('iframe[src*="hcaptcha"], iframe[src*="captcha"], [class*="captcha"], iframe[title*="captcha" i]'),
         mfa: !!q('input[autocomplete="one-time-code"], input[placeholder*="6-digit"], input[maxlength="6"]'),
+        verify: /verif|check your email|confirm your email|enter the code/i.test(body),
         heading: (q('h1, h2, h3') || {}).textContent || '',
         errors: errs,
+        fields: [...document.querySelectorAll('input')].map(el => el.name || el.getAttribute('aria-label') || el.type).filter(Boolean).slice(0, 12),
       };
     })()`, true);
     console.log('Login state:', JSON.stringify(s));
+    return s;
   } catch (e) {
     console.error('Login state check failed', String(e.message || e));
+    return null;
+  }
+}
+
+// One field that holds the whole code. insertText goes through Chromium's real input path.
+async function fillOneTimeCode(wc, code) {
+  const SEL = 'input[autocomplete="one-time-code"], input[placeholder*="6-digit" i], input[maxlength="6"], input[name*="code" i]';
+  if (!(await focusField(wc, SEL))) return false;
+  await wc.insertText(code);
+  await wc.executeJavaScript(`(() => { const b = document.querySelector('button[type="submit"]'); if (b) b.click(); return !!b; })()`, true);
+  return true;
+}
+
+// Signup reserved by the mail control center for this browser run. Password stays in memory.
+let mailAccount = null;
+let mailStarting = false;
+let mailWatching = false;
+let mailCodeFilled = false;
+let mailLinkOpened = false;
+let mailHumanAsked = false;
+let mailGaveUp = false;
+let mailReadNoted = false;
+
+async function applyVerification(wc) {
+  if (!mailAccount || mailGaveUp || mailReadNoted || (mailCodeFilled && mailLinkOpened)) return;
+  let result;
+  try {
+    result = await mail.waitForVerification(mailAccount.account_id, { timeout: 8 });
+  } catch (e) {
+    console.error('Mail verification failed', String(e.message || e));
+    return;
+  }
+  if (result.error) {
+    if (/doesn't read mail/i.test(result.error)) mailReadNoted = true;
+    else mailGaveUp = true;
+    console.log('Mail verification:', result.error);
+    return;
+  }
+  if (!result.found) {
+    console.log('Mail verification:', result.hint || 'not found yet');
+    return;
+  }
+  const code = (result.codes && result.codes[0]) || '';
+  const link = (result.links && result.links[0]) || '';
+  if (code && !mailCodeFilled) {
+    const filled = await fillOneTimeCode(wc, code);
+    mailCodeFilled = filled;
+    console.log(filled ? `Mail verification code filled (${code.length} chars)` : 'Mail verification code field not found');
+    if (filled) return;
+  }
+  if (link && !mailLinkOpened) {
+    mailLinkOpened = true;
+    console.log('Mail verification link opened');
+    await wc.loadURL(link);
+  }
+}
+
+function parseCaptchaReply(text) {
+  const actions = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    let m;
+    if ((m = /^CLICK\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*$/i.exec(line))) {
+      actions.push({ op: 'click', x: Number(m[1]), y: Number(m[2]) });
+    } else if ((m = /^DRAG\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*$/i.exec(line))) {
+      actions.push({ op: 'drag', x1: Number(m[1]), y1: Number(m[2]), x2: Number(m[3]), y2: Number(m[4]) });
+    } else if ((m = /^TYPE\s+(.+)$/i.exec(line))) {
+      actions.push({ op: 'type', text: m[1] });
+    } else if (/^DONE\s*$/i.test(line)) {
+      actions.push({ op: 'done' });
+    } else if ((m = /^FAIL\b\s*(.*)$/i.exec(line))) {
+      actions.push({ op: 'fail', reason: m[1] });
+    }
+  }
+  return actions;
+}
+
+async function captureChallenge(wc) {
+  const image = await wc.capturePage();
+  const css = await wc.executeJavaScript('({w: window.innerWidth, h: window.innerHeight})', true);
+  const size = image.getSize();
+  const dir = path.join(os.homedir(), '.cache', 'agentdeez', 'captcha');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `challenge-${Date.now()}.png`);
+  fs.writeFileSync(file, image.toPNG(), { mode: 0o600 });
+  return {
+    file,
+    width: size.width,
+    height: size.height,
+    scaleX: css.w ? size.width / css.w : 1,
+    scaleY: css.h ? size.height / css.h : 1,
+  };
+}
+
+async function readCaptchaMeta(wc) {
+  return wc.executeJavaScript(`(() => {
+    const iframe = document.querySelector('iframe[src*="hcaptcha"], iframe[src*="recaptcha"], iframe[src*="captcha"]');
+    const src = (iframe && iframe.src) || '';
+    const key = src.match(/[?&]sitekey=([^&]+)/i);
+    let type = 'captcha';
+    if (/hcaptcha/i.test(src)) type = 'hCaptcha';
+    else if (/recaptcha/i.test(src)) type = 'reCAPTCHA';
+    return { type, sitekey: key ? decodeURIComponent(key[1]) : '', prompt: '' };
+  })()`, true);
+}
+
+function pagePoint(shot, x, y) {
+  return { x: Math.round(x / shot.scaleX), y: Math.round(y / shot.scaleY) };
+}
+
+async function applyCaptchaReply(wc, reply, shot) {
+  const actions = parseCaptchaReply(reply);
+  if (!actions.length) return 'unparsed';
+  if (actions.some((a) => a.op === 'fail')) return 'fail';
+  let clicks = 0;
+  let typed = 0;
+  for (const action of actions) {
+    if (wc.isDestroyed()) return 'destroyed';
+    if (action.op === 'click') {
+      const p = pagePoint(shot, action.x, action.y);
+      wc.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+      clicks += 1;
+      await new Promise((r) => setTimeout(r, 200));
+    } else if (action.op === 'drag') {
+      const a = pagePoint(shot, action.x1, action.y1);
+      const b = pagePoint(shot, action.x2, action.y2);
+      const steps = 20;
+      wc.sendInputEvent({ type: 'mouseMove', x: a.x, y: a.y });
+      wc.sendInputEvent({ type: 'mouseDown', x: a.x, y: a.y, button: 'left', clickCount: 1 });
+      await new Promise((r) => setTimeout(r, 150));
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        const ease = t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+        const x = Math.round(a.x + (b.x - a.x) * ease);
+        const y = Math.round(a.y + (b.y - a.y) * ease + Math.sin(Math.PI * t) * 6);
+        wc.sendInputEvent({ type: 'mouseMove', x, y, button: 'left' });
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      await new Promise((r) => setTimeout(r, 100));
+      wc.sendInputEvent({ type: 'mouseUp', x: b.x, y: b.y, button: 'left', clickCount: 1 });
+      clicks += 1;
+    } else if (action.op === 'type') {
+      await wc.insertText(action.text);
+      typed += action.text.length;
+    }
+  }
+  console.log(`Captcha apply clicks=${clicks} typed=${typed} chars`);
+  if (actions.length === 1 && actions[0].op === 'done') return 'done';
+  return 'applied';
+}
+
+function cdpVersion(port) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(`http://127.0.0.1:${port}/json/version`, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+      });
+    });
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error('cdp timeout')); });
+    req.on('error', reject);
+  });
+}
+
+// The captcha bot drives this browser itself. Coordinate replies are not applied.
+async function runCaptchaBot(wc) {
+  const port = process.env.AGENTDEEZ_CDP_PORT || '9222';
+  const advertised = process.env.AGENTDEEZ_CDP_ADVERTISE || `http://127.0.0.1:${port}`;
+  let ws = '';
+  try {
+    const info = await cdpVersion(port);
+    const local = info.webSocketDebuggerUrl || '';
+    ws = local.replace(/^ws:\/\/127\.0\.0\.1:\d+/, advertised.replace(/^http/, 'ws'));
+  } catch (e) {
+    console.error('Captcha CDP unavailable', String(e.message || e));
+  }
+  let result;
+  try {
+    result = await mail.handBrowser({
+      accountId: mailAccount.account_id,
+      url: wc.getURL(),
+      cdp: advertised,
+      ws,
+    });
+  } catch (e) {
+    console.error('Captcha browser handoff failed', String(e.message || e).slice(0, 300));
+    return;
+  }
+  console.log('Captcha browser handoff', result.task_id, result.captcha_bot ? 'sent' : 'not-sent');
+  const again = await reportLoginState(wc);
+  console.log('Captcha after handoff', again && again.captcha ? 'still-up' : 'cleared');
+}
+
+async function handleMailChallenge(wc) {
+  if (!mailAccount || wc.isDestroyed()) return;
+  const state = await reportLoginState(wc);
+  if (!state) return;
+  if (state.captcha && !mailHumanAsked) {
+    mailHumanAsked = true;
+    await runCaptchaBot(wc);
+    return;
+  }
+  if (state.mfa || state.verify) await applyVerification(wc);
+}
+
+async function watchForMailChallenge(wc) {
+  if (mailWatching) return;
+  mailWatching = true;
+  const watchMs = Number(process.env.AGENTDEEZ_SIGNUP_WATCH || 180) * 1000;
+  const started = Date.now();
+  while (Date.now() - started < watchMs && !wc.isDestroyed() && !mailGaveUp && !mailCodeFilled && !mailLinkOpened) {
+    await new Promise((r) => setTimeout(r, 3000));
+    await handleMailChallenge(wc);
+  }
+  mailWatching = false;
+  console.log('Mail watch finished');
+}
+
+async function maybeStartSignup(wc, url) {
+  if (process.env.AGENTDEEZ_ACCOUNT_ID) return false;
+  const platform = process.env.AGENTDEEZ_SIGNUP_PLATFORM;
+  if (!platform || mailStarting || mailAccount || !mail.enabled() || !signup.isSignupUrl(url)) return false;
+  mailStarting = true;
+  try {
+    mailAccount = await mail.startSignup({
+      agent: process.env.AGENTDEEZ_AGENT || 'agentdeez',
+      platform,
+      senderHint: process.env.AGENTDEEZ_SENDER_HINT || platform,
+      useRelay: process.env.AGENTDEEZ_USE_RELAY === '1',
+    });
+    console.log(`Mail signup ${mailAccount.account_id} for ${platform}`);
+    if (platform.toLowerCase() === 'discord') {
+      await signup.fillDiscordRegister(wc, mailAccount.email, mailAccount.password);
+      signup.watchSignupCaptcha(wc);
+    } else {
+      await autoFillAndLogin(wc, mailAccount.email, mailAccount.password);
+      watchForMailChallenge(wc);
+    }
+    return true;
+  } catch (e) {
+    if (!mailAccount) mailStarting = false;
+    console.error('Mail signup failed', String(e.message || e).slice(0, 300));
+    return false;
   }
 }
 
@@ -307,13 +568,16 @@ if (!app.requestSingleInstanceLock()) {
       if (permission === 'media' || !ASK.has(permission)) return true;
       return decisions.get(`${originOf(origin)} ${permission}`) === true;
     });
-    setUpAdblock(session.defaultSession, tabs.countBlocked);
+    // Signup has to load the hCaptcha widget. The blocker stalls that widget on its splash.
+    if (!process.env.AGENTDEEZ_SIGNUP_PLATFORM) setUpAdblock(session.defaultSession, tabs.countBlocked);
     watchDiscordAuth(session.defaultSession);
     tabs.setUpStripMessages();
 
-    const token = readDiscordToken();
-    const creds = readDiscordCreds();
-    const startUrl = urlFromArgs(process.argv) || ((token || creds) ? 'https://discord.com/login' : HOME);
+    const signupRun = Boolean(process.env.AGENTDEEZ_SIGNUP_PLATFORM);
+    const token = signupRun ? null : readDiscordToken();
+    const creds = signupRun ? null : readDiscordCreds();
+    const discordSignup = signupRun && (process.env.AGENTDEEZ_SIGNUP_PLATFORM || '').toLowerCase() === 'discord';
+    const startUrl = urlFromArgs(process.argv) || (discordSignup ? 'https://discord.gg/arcane' : ((token || creds) ? 'https://discord.com/login' : HOME));
     const state = openWindow(startUrl);
 
     const wc = tabs.pageOf(state.win);
@@ -336,6 +600,22 @@ if (!app.requestSingleInstanceLock()) {
           return;
         }
 
+        if (signup.state.needsRefill && mailAccount && signup.isSignupUrl(url)) {
+          if (signup.state.refillRunning) return;
+          signup.state.refillRunning = true;
+          signup.state.needsRefill = false;
+          try {
+            console.log('Refilling invite form');
+            await signup.fillDiscordRegister(wc, mailAccount.email, mailAccount.password);
+            signup.watchSignupCaptcha(wc);
+          } finally {
+            signup.state.refillRunning = false;
+          }
+          return;
+        }
+
+        if (await maybeStartSignup(wc, url)) return;
+
         // If we have credentials and are on the login page, auto-fill once. With a stored token this only
         // happens when Discord bounced back to /login after the injected token's reload (token expired).
         if (creds && !filling && url.includes('/login') && (!injected || Date.now() - injectedAt > 3000)) {
@@ -344,7 +624,7 @@ if (!app.requestSingleInstanceLock()) {
         }
 
         // After login (on /app or channels), extract and save the token
-        if (!extracted && !extracting && (url.includes('/app') || url.includes('/channels'))) {
+        if (!signupRun && !extracted && !extracting && (url.includes('/app') || url.includes('/channels'))) {
           extracting = true;
           extracted = await extractAndSaveToken(wc);
           extracting = false;
@@ -356,6 +636,15 @@ if (!app.requestSingleInstanceLock()) {
       // Discord moves from /login to /channels with pushState, which only fires did-navigate-in-page.
       wc.on('did-navigate-in-page', onLoad);
       setTimeout(onLoad, 800);
+
+      const resumeId = process.env.AGENTDEEZ_ACCOUNT_ID;
+      if (resumeId && mail.enabled()) {
+        mail.credentials(resumeId).then((acct) => {
+          mailAccount = acct;
+          console.log(`Mail account ${mailAccount.account_id} resumed`);
+          watchForMailChallenge(wc);
+        }).catch((e) => console.error('Mail account resume failed', String(e.message || e)));
+      }
     }
 
     setUpUpdater();

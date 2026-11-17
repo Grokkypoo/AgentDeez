@@ -7,6 +7,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "signup:discord": "bash scripts/signup-until-captcha.sh",
     "dist:linux": "electron-builder --linux",
     "dist:win": "electron-builder --win",
     "fetch-filters": "node scripts/fetch-filters.mjs"
@@ -22,6 +23,7 @@
     "files": [
       "main.js",
       "infisical.js",
+      "mail-control.js",
       "updater.js",
       "tabs.js",
       "adblock.js",
