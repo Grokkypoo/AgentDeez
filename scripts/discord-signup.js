@@ -41,12 +41,58 @@ function classifyCaptcha(text) {
   return 'none';
 }
 
-function birthDate() {
-  return {
-    month: process.env.AGENTDEEZ_BIRTH_MONTH || 'March',
-    day: process.env.AGENTDEEZ_BIRTH_DAY || '15',
-    year: process.env.AGENTDEEZ_BIRTH_YEAR || '1996',
-  };
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const GIVEN_NAMES = ['Harbor', 'Cedar', 'Rowan', 'Wren', 'Milo', 'Ada', 'Jonah', 'Leif', 'Nora', 'Silas', 'Ivy', 'Oscar', 'Freya', 'Calvin', 'Maren', 'Theo', 'Sable', 'Edith', 'Felix', 'Greta', 'Nico', 'Pearl', 'Hugo', 'Iris'];
+const FAMILY_NAMES = ['Quill', 'Brooks', 'Harlow', 'Ellison', 'Voss', 'Keller', 'Moreau', 'Ashford', 'Lind', 'Parke', 'Holland', 'Keene', 'Sutter', 'Adler', 'Marlow', 'Crowe', 'Bennett', 'Lang', 'Pike', 'Sorrel', 'Dalton', 'Frost', 'Hale', 'Winter'];
+
+function daysInMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+function ageOn(birth, today) {
+  let age = today.getFullYear() - birth.getFullYear();
+  const beforeBirthday = today.getMonth() < birth.getMonth()
+    || (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate());
+  if (beforeBirthday) age -= 1;
+  return age;
+}
+
+// A calendar date whose age on `today` is from 18 through 50, inclusive.
+function randomBirthDate(rng = Math.random, today = new Date()) {
+  const minYear = today.getFullYear() - 51;
+  const maxYear = today.getFullYear() - 18;
+  for (let i = 0; i < 40; i++) {
+    const year = minYear + Math.floor(rng() * (maxYear - minYear + 1));
+    const monthIndex = Math.floor(rng() * 12);
+    const day = 1 + Math.floor(rng() * daysInMonth(year, monthIndex));
+    const birth = new Date(year, monthIndex, day);
+    const age = ageOn(birth, today);
+    if (age >= 18 && age <= 50) {
+      return { month: MONTHS[monthIndex], day: String(day), year: String(year), age };
+    }
+  }
+  throw new Error('could not pick a birthday in range');
+}
+
+function randomDisplayName(rng = Math.random) {
+  const given = GIVEN_NAMES[Math.floor(rng() * GIVEN_NAMES.length)];
+  const family = FAMILY_NAMES[Math.floor(rng() * FAMILY_NAMES.length)];
+  return `${given} ${family}`;
+}
+
+function usernameFrom(display) {
+  const base = display.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'name';
+  return `${base}${Date.now().toString(36).slice(-4)}`;
+}
+
+function profileIdentity(rng = Math.random, today = new Date()) {
+  const display = process.env.AGENTDEEZ_DISPLAY_NAME || randomDisplayName(rng);
+  const pinned = process.env.AGENTDEEZ_BIRTH_MONTH && process.env.AGENTDEEZ_BIRTH_DAY && process.env.AGENTDEEZ_BIRTH_YEAR;
+  const born = pinned
+    ? { month: process.env.AGENTDEEZ_BIRTH_MONTH, day: process.env.AGENTDEEZ_BIRTH_DAY, year: process.env.AGENTDEEZ_BIRTH_YEAR }
+    : randomBirthDate(rng, today);
+  const user = process.env.AGENTDEEZ_USERNAME || usernameFrom(display);
+  return { display, user, born };
 }
 
 async function focusField(wc, selector) {
@@ -115,9 +161,11 @@ async function clickSubmit(wc) {
 // Values are typed through insertText. Lengths only are logged by the caller.
 async function fillDiscordRegister(wc, email, password) {
   if (wc.isDestroyed()) return 'destroyed';
-  const display = process.env.AGENTDEEZ_DISPLAY_NAME || 'Harbor Quill';
-  const user = process.env.AGENTDEEZ_USERNAME || `harbor${Date.now().toString(36).slice(-6)}`;
-  const born = birthDate();
+  const identity = profileIdentity();
+  const display = identity.display;
+  const user = identity.user;
+  const born = identity.born;
+  console.log('Register identity', JSON.stringify({ display, username: user, dob: born }));
   const displaySel = 'input[name="global_name"], input[aria-label="Display Name" i], input[placeholder*="call you" i]';
   const emailSel = 'input[name="email"], input[aria-label="Email" i], input[type="email"]';
   const userSel = 'input[name="username"], input[aria-label="Username" i]';
@@ -312,10 +360,55 @@ function selfTest() {
     const got = isSignupUrl(url);
     if (got !== want) throw new Error(`url ${url} => ${got}, want ${want}`);
   }
-  const born = birthDate();
-  if (born.month !== 'March' || born.day !== '15' || born.year !== '1996') {
-    throw new Error('default birthday changed');
+  const today = new Date(2026, 10, 16);
+  if (ageOn(new Date(2008, 10, 16), today) !== 18) throw new Error('age 18 boundary');
+  if (ageOn(new Date(2008, 10, 17), today) !== 17) throw new Error('age 17 boundary');
+  if (ageOn(new Date(1976, 10, 16), today) !== 50) throw new Error('age 50 boundary');
+  if (ageOn(new Date(1975, 10, 16), today) !== 51) throw new Error('age 51 boundary');
+  const seenNames = new Set();
+  let seed = 7;
+  const rng = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let i = 0; i < 200; i++) {
+    const born = randomBirthDate(rng, today);
+    const birth = new Date(Number(born.year), MONTHS.indexOf(born.month), Number(born.day));
+    const age = ageOn(birth, today);
+    if (age < 18 || age > 50) throw new Error(`birthday age ${age} for ${born.month} ${born.day} ${born.year}`);
+    if (birth.getDate() !== Number(born.day)) throw new Error('impossible day');
   }
+  for (let i = 0; i < 40; i++) {
+    const name = randomDisplayName(rng);
+    const [given, family, extra] = name.split(' ');
+    if (extra || !GIVEN_NAMES.includes(given) || !FAMILY_NAMES.includes(family)) throw new Error(`bad name ${name}`);
+    seenNames.add(name);
+  }
+  if (seenNames.size < 8) throw new Error('name combinations did not vary');
+  const saved = {
+    name: process.env.AGENTDEEZ_DISPLAY_NAME,
+    month: process.env.AGENTDEEZ_BIRTH_MONTH,
+    day: process.env.AGENTDEEZ_BIRTH_DAY,
+    year: process.env.AGENTDEEZ_BIRTH_YEAR,
+  };
+  process.env.AGENTDEEZ_DISPLAY_NAME = 'Pinned Name';
+  process.env.AGENTDEEZ_BIRTH_MONTH = 'March';
+  process.env.AGENTDEEZ_BIRTH_DAY = '15';
+  process.env.AGENTDEEZ_BIRTH_YEAR = '1996';
+  const pinned = profileIdentity(rng, today);
+  if (pinned.display !== 'Pinned Name' || pinned.born.year !== '1996') throw new Error('env pin ignored');
+  delete process.env.AGENTDEEZ_DISPLAY_NAME;
+  delete process.env.AGENTDEEZ_BIRTH_MONTH;
+  delete process.env.AGENTDEEZ_BIRTH_DAY;
+  delete process.env.AGENTDEEZ_BIRTH_YEAR;
+  const open = profileIdentity(rng, today);
+  const openAge = ageOn(new Date(Number(open.born.year), MONTHS.indexOf(open.born.month), Number(open.born.day)), today);
+  if (openAge < 18 || openAge > 50) throw new Error('unpinned age out of range');
+  if (!open.display.includes(' ')) throw new Error('unpinned name is not a combination');
+  if (saved.name) process.env.AGENTDEEZ_DISPLAY_NAME = saved.name;
+  if (saved.month) process.env.AGENTDEEZ_BIRTH_MONTH = saved.month;
+  if (saved.day) process.env.AGENTDEEZ_BIRTH_DAY = saved.day;
+  if (saved.year) process.env.AGENTDEEZ_BIRTH_YEAR = saved.year;
   console.log('discord-signup self-test ok');
 }
 

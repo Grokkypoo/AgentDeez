@@ -49,7 +49,7 @@ Quit with Ctrl+Q the first time so the Electron session is fully flushed.
 bash scripts/signup-until-captcha.sh
 ```
 
-Defaults are display name `Harbor Quill` and birthday March 15, 1996. Override with `AGENTDEEZ_DISPLAY_NAME`, `AGENTDEEZ_BIRTH_MONTH`, `AGENTDEEZ_BIRTH_DAY`, and `AGENTDEEZ_BIRTH_YEAR`. The mail control center (`outlook-email-automation`, next to this repo, or `OUTLOOK_AUTOMATION_ROOT`) reserves the address. With `softeria` it only reserves the address. `AGENTDEEZ_USE_RELAY=1` asks for a Firefox Relay mask.
+Each run combines a display name from a given-name list and a family-name list, and picks a birthday whose age is 18 through 50. Set `AGENTDEEZ_DISPLAY_NAME` to pin the name. Set `AGENTDEEZ_BIRTH_MONTH`, `AGENTDEEZ_BIRTH_DAY`, and `AGENTDEEZ_BIRTH_YEAR` together to pin the date. The mail control center (`outlook-email-automation`, next to this repo, or `OUTLOOK_AUTOMATION_ROOT`) reserves the address. With `softeria` it only reserves the address. `AGENTDEEZ_USE_RELAY=1` asks for a Firefox Relay mask.
 
 `node scripts/discord-signup.js` checks the captcha classifier and the invite URL match without opening a window.
 

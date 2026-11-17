@@ -21,10 +21,9 @@ export AGENTDEEZ_FROM_SOURCE=1
 export AGENTDEEZ_PROFILE_DIR="${AGENTDEEZ_PROFILE_DIR:-$HOME/.config/AgentDeez-signup}"
 export AGENTDEEZ_TOKEN_FILES="${AGENTDEEZ_TOKEN_FILES:-0}"
 export AGENTDEEZ_CDP_PORT="${AGENTDEEZ_CDP_PORT:-9222}"
-export AGENTDEEZ_DISPLAY_NAME="${AGENTDEEZ_DISPLAY_NAME:-Harbor Quill}"
-export AGENTDEEZ_BIRTH_MONTH="${AGENTDEEZ_BIRTH_MONTH:-March}"
-export AGENTDEEZ_BIRTH_DAY="${AGENTDEEZ_BIRTH_DAY:-15}"
-export AGENTDEEZ_BIRTH_YEAR="${AGENTDEEZ_BIRTH_YEAR:-1996}"
+# Leave the display name and birthday unset. The signup module combines a name
+# and picks a date for an age from 18 through 50. Set AGENTDEEZ_DISPLAY_NAME,
+# or all three of AGENTDEEZ_BIRTH_MONTH, AGENTDEEZ_BIRTH_DAY, and AGENTDEEZ_BIRTH_YEAR, to pin them.
 
 LOG="${AGENTDEEZ_SIGNUP_LOG:-$HOME/.cache/agentdeez/signup-until-captcha.log}"
 mkdir -p "$(dirname "$LOG")"
@@ -41,7 +40,7 @@ deadline=$((SECONDS + ${AGENTDEEZ_SIGNUP_DEADLINE:-180}))
 while (( SECONDS < deadline )); do
   if grep -q 'Captcha probe SENT' "$LOG"; then
     echo "signup-until-captcha: name and birthday submitted, live captcha, probe sent"
-    grep -E 'Register profile|Register next|Captcha frame live|Captcha probe SENT' "$LOG"
+    grep -E 'Register identity|Register profile|Register next|Captcha frame live|Captcha probe SENT' "$LOG"
     exit 0
   fi
   if grep -q 'Captcha stayed dead' "$LOG"; then
