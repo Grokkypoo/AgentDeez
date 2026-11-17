@@ -42,8 +42,7 @@ function classifyCaptcha(text) {
 }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const GIVEN_NAMES = ['Harbor', 'Cedar', 'Rowan', 'Wren', 'Milo', 'Ada', 'Jonah', 'Leif', 'Nora', 'Silas', 'Ivy', 'Oscar', 'Freya', 'Calvin', 'Maren', 'Theo', 'Sable', 'Edith', 'Felix', 'Greta', 'Nico', 'Pearl', 'Hugo', 'Iris'];
-const FAMILY_NAMES = ['Quill', 'Brooks', 'Harlow', 'Ellison', 'Voss', 'Keller', 'Moreau', 'Ashford', 'Lind', 'Parke', 'Holland', 'Keene', 'Sutter', 'Adler', 'Marlow', 'Crowe', 'Bennett', 'Lang', 'Pike', 'Sorrel', 'Dalton', 'Frost', 'Hale', 'Winter'];
+const ALNUM = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
 function daysInMonth(year, monthIndex) {
   return new Date(year, monthIndex + 1, 0).getDate();
@@ -74,10 +73,16 @@ function randomBirthDate(rng = Math.random, today = new Date()) {
   throw new Error('could not pick a birthday in range');
 }
 
+function randomAlphanumeric(rng, length) {
+  let out = '';
+  for (let i = 0; i < length; i++) out += ALNUM[Math.floor(rng() * ALNUM.length)];
+  return out;
+}
+
+// Display names are a random alphanumeric string, 8 through 16 characters.
 function randomDisplayName(rng = Math.random) {
-  const given = GIVEN_NAMES[Math.floor(rng() * GIVEN_NAMES.length)];
-  const family = FAMILY_NAMES[Math.floor(rng() * FAMILY_NAMES.length)];
-  return `${given} ${family}`;
+  const length = 8 + Math.floor(rng() * 9);
+  return randomAlphanumeric(rng, length);
 }
 
 function usernameFrom(display) {
@@ -380,11 +385,10 @@ function selfTest() {
   }
   for (let i = 0; i < 40; i++) {
     const name = randomDisplayName(rng);
-    const [given, family, extra] = name.split(' ');
-    if (extra || !GIVEN_NAMES.includes(given) || !FAMILY_NAMES.includes(family)) throw new Error(`bad name ${name}`);
+    if (!/^[A-Za-z0-9]{8,16}$/.test(name)) throw new Error(`bad name ${name}`);
     seenNames.add(name);
   }
-  if (seenNames.size < 8) throw new Error('name combinations did not vary');
+  if (seenNames.size < 8) throw new Error('names did not vary');
   const saved = {
     name: process.env.AGENTDEEZ_DISPLAY_NAME,
     month: process.env.AGENTDEEZ_BIRTH_MONTH,
@@ -404,7 +408,7 @@ function selfTest() {
   const open = profileIdentity(rng, today);
   const openAge = ageOn(new Date(Number(open.born.year), MONTHS.indexOf(open.born.month), Number(open.born.day)), today);
   if (openAge < 18 || openAge > 50) throw new Error('unpinned age out of range');
-  if (!open.display.includes(' ')) throw new Error('unpinned name is not a combination');
+  if (!/^[A-Za-z0-9]{8,16}$/.test(open.display)) throw new Error('unpinned name is not alphanumeric');
   if (saved.name) process.env.AGENTDEEZ_DISPLAY_NAME = saved.name;
   if (saved.month) process.env.AGENTDEEZ_BIRTH_MONTH = saved.month;
   if (saved.day) process.env.AGENTDEEZ_BIRTH_DAY = saved.day;

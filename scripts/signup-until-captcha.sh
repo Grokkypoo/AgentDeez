@@ -21,8 +21,8 @@ export AGENTDEEZ_FROM_SOURCE=1
 export AGENTDEEZ_PROFILE_DIR="${AGENTDEEZ_PROFILE_DIR:-$HOME/.config/AgentDeez-signup}"
 export AGENTDEEZ_TOKEN_FILES="${AGENTDEEZ_TOKEN_FILES:-0}"
 export AGENTDEEZ_CDP_PORT="${AGENTDEEZ_CDP_PORT:-9222}"
-# Leave the display name and birthday unset. The signup module combines a name
-# and picks a date for an age from 18 through 50. Set AGENTDEEZ_DISPLAY_NAME,
+# Leave the display name and birthday unset. The signup module picks a random
+# alphanumeric display name and a date for an age from 18 through 50. Set AGENTDEEZ_DISPLAY_NAME,
 # or all three of AGENTDEEZ_BIRTH_MONTH, AGENTDEEZ_BIRTH_DAY, and AGENTDEEZ_BIRTH_YEAR, to pin them.
 
 LOG="${AGENTDEEZ_SIGNUP_LOG:-$HOME/.cache/agentdeez/signup-until-captcha.log}"
